@@ -99,10 +99,12 @@ void loop()
                             }
                         } else  {
                             Serial.println("Couldn't find characteristic");
-                            fault = true;                        }
+                            fault = true;                        
+                            }
                     } else {
                         Serial.println("Attribute Discovery Failed");
-                        fault = true;                    }
+                        fault = true;                    
+                        }
                 } else {
                     Serial.println("Couldn't connect to Para Slave, Rescanning");
                     fault = true;
