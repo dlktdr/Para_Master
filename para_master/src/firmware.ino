@@ -132,6 +132,16 @@ static constexpr uint8_t START_STOP = 0x7E;
 static constexpr uint8_t BYTE_STUFF = 0x7D;
 #define BLUETOOTH_LINE_LENGTH           32
 
+void printHex(uint8_t *addr, int len)
+{
+    for(int i=0;i<len;i++) {
+        Serial.print("0x");
+        Serial.print(addr[i], HEX);
+        Serial.print(" ");        
+    }
+    Serial.println("");
+}
+
 // Called when Radio Outputs new Data
 void fff6Written(BLEDevice central, BLECharacteristic characteristic) {
     // Got Data Must Be Connected
@@ -142,12 +152,7 @@ void fff6Written(BLEDevice central, BLECharacteristic characteristic) {
 
 #ifdef DEBUG
     Serial.print("Data Received: ");
-    for(int i=0;i<len;i++) {
-        Serial.print("0x");
-        Serial.print(buffer[i], HEX);
-        Serial.print(" ");        
-    }
-    Serial.println("");
+    
 #endif    
 
     // Store Channel Data
@@ -160,12 +165,12 @@ void fff6Written(BLEDevice central, BLECharacteristic characteristic) {
         } else {
             // Set the PPM outputs
             for(int i=0;i<8;i++) {
+                ppmout.setChannel(i,ppmInput[i]);        
 #ifdef DEBUG
-                Serial.print("Channel Vals ");
+                Serial.print("Channels ");
                 Serial.print(ppmInput[i]);
                 Serial.print(" ");
-#endif                
-                ppmout.setChannel(i,ppmInput[i]);        
+#endif                               
             }    
 #ifdef DEBUG
             Serial.println("");
@@ -180,16 +185,16 @@ void fff6Written(BLEDevice central, BLECharacteristic characteristic) {
 int decodeBLEData(uint8_t *buffer, int len, uint16_t *channelvals) 
 {
     uint8_t crc = 0x00;
-    for (int i=0; i<13; i++) {
+    for (int i=0; i<len-2; i++) {
         crc ^= buffer[i];
     }
     
-    if (crc == buffer[13]) {
+    if (crc == buffer[len-2]) {
         if (buffer[0] == 0x80) {
             for (uint8_t channel=0, i=1; channel<8; channel+=2, i+=3) {
                 // +-500 != 512, but close enough.
-                channelvals[channel] = buffer[i] + ((buffer[i+1] & 0xf0) << 4) - 1500;
-                channelvals[channel+1] = ((buffer[i+1] & 0x0f) << 4) + ((buffer[i+2] & 0xf0) >> 4) + ((buffer[i+2] & 0x0f) << 8) - 1500;
+                channelvals[channel] = buffer[i] + ((buffer[i+1] & 0xf0) << 4);
+                channelvals[channel+1] = ((buffer[i+1] & 0x0f) << 4) + ((buffer[i+2] & 0xf0) >> 4) + ((buffer[i+2] & 0x0f) << 8);
             }            
         } 
         else
