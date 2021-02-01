@@ -24,10 +24,6 @@ void setup()
     digitalWrite(LED_BLUE,HIGH); // Connected If Blue
 
     Serial.begin(115200);
- 
-#ifdef DEBUG
-    while (!Serial); // wait to open the serial monitor
-#endif
     
     if(!BLE.begin()) {
         Serial.println("Could not start BLE");
@@ -166,7 +162,7 @@ void fff6Written(BLEDevice central, BLECharacteristic characteristic) {
 
 #ifdef DEBUG       
     for(int i=0;i<8;i++) {
-        Serial.print("Ch");Serial.print(i);Serial.print(":");Serial.print(ppmInput[i]);Serial.print(" ");
+        Serial.print("Ch");Serial.print(i+1);Serial.print(":");Serial.print(ppmInput[i]);Serial.print(" ");
     }
     Serial.println("");
 #endif        
