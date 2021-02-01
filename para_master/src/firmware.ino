@@ -157,7 +157,7 @@ void fff6Written(BLEDevice central, BLECharacteristic characteristic) {
     for(int i=0;i<8;i++) {
         // Limit channels to 1000 - 2000us
         ppmInput[i] = MAX(MIN(ppmInput[i],2000),1000); 
-        ppmout.setChannel(i,ppmInput[i]);
+        ppmout.setChannel(i+1,ppmInput[i]);
     }    
 
 #ifdef DEBUG       
