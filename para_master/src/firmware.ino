@@ -1,10 +1,14 @@
 #include <ArduinoBLE.h>
 #include <Arduino.h>
 #include "PPMOut.h"
+#include "opentxbt.h"
 
 #define DEBUG
 
+uint16_t ppmInput[8];
+
 int decodeBLEData(uint8_t *buffer, int len, uint16_t *channelvals);
+void processTrainerByte(uint8_t data);
 
 bool scanning = false;
 BLEDevice peripheral;
@@ -130,9 +134,6 @@ void loop()
     
 }
 
-static constexpr uint8_t START_STOP = 0x7E;
-static constexpr uint8_t BYTE_STUFF = 0x7D;
-#define BLUETOOTH_LINE_LENGTH           32
 
 void printHex(uint8_t *addr, int len)
 {
@@ -141,69 +142,32 @@ void printHex(uint8_t *addr, int len)
         Serial.print(addr[i], HEX);
         Serial.print(" ");        
     }
-    Serial.println("");
 }
 
 // Called when Radio Outputs new Data
 void fff6Written(BLEDevice central, BLECharacteristic characteristic) {
     // Got Data Must Be Connected
     digitalWrite(LED_BLUE,LOW);
+  
+    uint8_t buffer1[BLUETOOTH_LINE_LENGTH+1];
+    int len = characteristic.readValue(buffer1,32);
 
-    uint8_t buffer[BLUETOOTH_LINE_LENGTH+1];
-    int len = characteristic.readValue(buffer,32);
-
-#ifdef DEBUG
-    Serial.print("Data Received: ");
-    
-#endif    
-
-    // Store Channel Data
-    uint16_t ppmInput[8];
-
-    // Valid Data
-    if(buffer[0] == START_STOP) {        
-        if(decodeBLEData(&buffer[1], len-1, ppmInput)) {
-            Serial.println("Error decoding data");
-        } else {
-            // Set the PPM outputs
-            for(int i=0;i<8;i++) {
-                ppmout.setChannel(i,ppmInput[i]);        
-#ifdef DEBUG
-                Serial.print("Channels ");
-                Serial.print(ppmInput[i]);
-                Serial.print(" ");
-#endif                               
-            }    
-#ifdef DEBUG
-            Serial.println("");
-#endif                      
-        }
+    // Simulate sending byte by byte like opentx uses
+    for(int i=0;i<len;i++) {
+        processTrainerByte(buffer1[i]);
     }
-}
+  
+     // Got the Channel Data, Set PPM Output
+    for(int i=0;i<8;i++) {
+        // Limit channels to 1000 - 2000us
+        ppmInput[i] = MAX(MIN(ppmInput[i],2000),1000); 
+        ppmout.setChannel(i,ppmInput[i]);
+    }    
 
-/* Modified From OpenTX 
- */
-
-int decodeBLEData(uint8_t *buffer, int len, uint16_t *channelvals) 
-{
-    uint8_t crc = 0x00;
-    for (int i=0; i<len-2; i++) {
-        crc ^= buffer[i];
+#ifdef DEBUG       
+    for(int i=0;i<8;i++) {
+        Serial.print("Ch");Serial.print(i);Serial.print(":");Serial.print(ppmInput[i]);Serial.print(" ");
     }
-    
-    if (crc == buffer[len-2]) {
-        if (buffer[0] == 0x80) {
-            for (uint8_t channel=0, i=1; channel<8; channel+=2, i+=3) {
-                // +-500 != 512, but close enough.
-                channelvals[channel] = buffer[i] + ((buffer[i+1] & 0xf0) << 4);
-                channelvals[channel+1] = ((buffer[i+1] & 0x0f) << 4) + ((buffer[i+2] & 0xf0) >> 4) + ((buffer[i+2] & 0x0f) << 8);
-            }            
-        } 
-        else
-            return -1;
-    }
-    else 
-        return -1;    
-
-    return 0;
+    Serial.println("");
+#endif        
 }
