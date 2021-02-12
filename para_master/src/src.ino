@@ -14,9 +14,6 @@ bool scanning = false;
 BLEDevice peripheral;
 BLECharacteristic fff6;
 
-// PPM Output on D10
-PpmOut ppmout(digitalPinToPinName(D10),8);
-
 void setup() 
 {
     pinMode(LED_BUILTIN, OUTPUT);
@@ -32,11 +29,21 @@ void setup()
         
     Serial.print("Local BLE Address: "); 
     Serial.println(BLE.address());
+
+    PpmOut_setPin(D10);
+    PpmOut_setChnCount(8);
 }
 
 void loop() 
 {
     digitalWrite(LED_BUILTIN,HIGH);
+
+    // Reset Channels to Center if not connected
+    if(!BLE.connected()) {        
+        for(int i=0;i < 8; i++) {
+            PpmOut_setChannel(i,1500);
+        }        
+    }
 
     // Start Scan for PARA Slaves
     if(!BLE.connected() && !scanning) {
@@ -130,7 +137,6 @@ void loop()
     
 }
 
-
 void printHex(uint8_t *addr, int len)
 {
     for(int i=0;i<len;i++) {
@@ -157,7 +163,7 @@ void fff6Written(BLEDevice central, BLECharacteristic characteristic) {
     for(int i=0;i<8;i++) {
         // Limit channels to 1000 - 2000us
         ppmInput[i] = MAX(MIN(ppmInput[i],2000),1000); 
-        ppmout.setChannel(i+1,ppmInput[i]);
+        PpmOut_setChannel(i,ppmInput[i]);
     }    
 
 #ifdef DEBUG       
