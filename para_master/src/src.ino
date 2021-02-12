@@ -30,8 +30,9 @@ void setup()
     Serial.print("Local BLE Address: "); 
     Serial.println(BLE.address());
 
-    PpmOut_setPin(D10);
     PpmOut_setChnCount(8);
+    PpmOut_setPin(D10);
+    
 }
 
 void loop() 
@@ -39,7 +40,7 @@ void loop()
     digitalWrite(LED_BUILTIN,HIGH);
 
     // Reset Channels to Center if not connected
-    if(!BLE.connected()) {        
+    if(!BLE.connected()) {
         for(int i=0;i < 8; i++) {
             PpmOut_setChannel(i,1500);
         }        
@@ -90,7 +91,7 @@ void loop()
                     delay(100); // Attribute discovery fails if done right away
                     Serial.println("Discovering Attributes");
                     if(peripheral.discoverAttributes()) {
-                        Serial.println("Discovered Attributes");
+                        Serial.println("Discovered Attributes"); 
                         fff6 = peripheral.service("fff0").characteristic("fff6");
                         if(fff6) {
                             Serial.println("Attaching Event Handler");

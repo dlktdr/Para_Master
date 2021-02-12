@@ -1,10 +1,7 @@
 #include <Arduino.h>
 
-
 #include <nrfx_ppi.h>
 #include <nrfx_gpiote.h>
-
-#include "serial.h"
 
 static uint32_t oldTimer3Interrupt=0;
 
@@ -71,8 +68,7 @@ void resetChannels()
 }
 
 extern "C" void Timer3ISR_Handler(void)
-{
-    digitalWrite(A1,HIGH);
+{    
     if(NRF_TIMER3->EVENTS_COMPARE[0] == 1) {
         // Clear event
         NRF_TIMER3->EVENTS_COMPARE[0] = 0;
@@ -97,7 +93,6 @@ extern "C" void Timer3ISR_Handler(void)
         // Setup next capture event value     
         NRF_TIMER3->CC[0] = isrchsteps[curstep] + isrchsteps[chstepcnt]; // Offset by the extra time required to make frame length right
     }
-    digitalWrite(A1,LOW);
 }
 
 // Set pin to -1 to disable
