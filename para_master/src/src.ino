@@ -13,11 +13,15 @@ void processTrainerByte(uint8_t data);
 bool scanning = false;
 BLEDevice peripheral;
 BLECharacteristic fff6;
+BLECharacteristic butpress;
+BLECharacteristic overridech;
 
 void setup() 
 {
     pinMode(LED_BUILTIN, OUTPUT);
     pinMode(LED_BLUE, OUTPUT);
+    pinMode(D2, INPUT_PULLUP); // Default
+    pinMode(D3, INPUT_PULLUP); // Optional for mating to custom case
     digitalWrite(LED_BLUE,HIGH); // Connected If Blue
 
     Serial.begin(115200);
@@ -43,7 +47,17 @@ void loop()
     if(!BLE.connected()) {
         for(int i=0;i < 8; i++) {
             PpmOut_setChannel(i,1500);
-        }        
+        }
+    }
+
+    // Reset to center from this slave board
+    if(BLE.connected() && butpress) {
+        if(digitalRead(D2) == 0 || 
+            digitalRead(D3) == 0) {
+                butpress.writeValue((uint8_t)'R');
+            } else {
+                butpress.writeValue((uint8_t)0);
+           }
     }
 
     // Start Scan for PARA Slaves
@@ -92,7 +106,7 @@ void loop()
                     Serial.println("Discovering Attributes");
                     if(peripheral.discoverAttributes()) {
                         Serial.println("Discovered Attributes"); 
-                        fff6 = peripheral.service("fff0").characteristic("fff6");
+                        fff6 = peripheral.service("fff0").characteristic("fff6");                        
                         if(fff6) {
                             Serial.println("Attaching Event Handler");
                             fff6.setEventHandler(BLEWritten, fff6Written);  // Call this function on data received
@@ -108,7 +122,16 @@ void loop()
                         } else  {
                             Serial.println("Couldn't find characteristic");
                             fault = true;                        
-                            }
+                        }
+                        // If this is a Headtracker it may have a reset center option
+                        butpress = peripheral.service("fff1").characteristic("fff2");
+                        if(butpress) {
+                            Serial.println("Tracker has ability to remote reset center");
+                        }
+                        overridech = peripheral.service("fff1").characteristic("fff1");
+                        if(overridech) {
+                            Serial.println("Tracker is sending the channels it has overriden");                            
+                        }
                     } else {
                         Serial.println("Attribute Discovery Failed");
                         fault = true;                    
