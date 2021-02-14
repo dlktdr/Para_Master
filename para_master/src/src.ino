@@ -1,20 +1,36 @@
 #include <ArduinoBLE.h>
 #include <Arduino.h>
 #include "PPMOut.h"
+#include "PPMIn.h"
 #include "opentxbt.h"
+#include "mbed.h"
 
 #define DEBUG
+#define CHANNEL_COUNT 8
+#define PPM_CENTER 1500
+#define WATCHDOG_TIMEOUT 8000
+#define IO_PERIOD 10 
 
-uint16_t ppmInput[8];
+uint16_t chanoverrides = 0xFFFF;
+uint16_t ppmChannels[16];
+int ppminchcnt=0;
 
 int decodeBLEData(uint8_t *buffer, int len, uint16_t *channelvals);
 void processTrainerByte(uint8_t data);
+void fff6Written(BLEDevice central, BLECharacteristic characteristic);
+void overrideWritten(BLEDevice central, BLECharacteristic characteristic);
+
+uint16_t ppmInput[8]; // Channels set here after decode the BT Data
+
+using namespace mbed;
 
 bool scanning = false;
 BLEDevice peripheral;
 BLECharacteristic fff6;
 BLECharacteristic butpress;
 BLECharacteristic overridech;
+Timer watchdog;
+Ticker ioTick;
 
 void setup() 
 {
@@ -34,30 +50,80 @@ void setup()
     Serial.print("Local BLE Address: "); 
     Serial.println(BLE.address());
 
-    PpmOut_setChnCount(8);
+    PpmOut_setChnCount(CHANNEL_COUNT);
     PpmOut_setPin(D10);
     
+    PpmIn_setPin(D9);
+
+    // Default all CH's at center
+    for(int i=0;i < CHANNEL_COUNT; i++) {
+        ppmChannels[i] = PPM_CENTER;
+    }
+
+    // Start the IO task at 100hz interrupt
+    ioTick.attach(callback(io_Task),std::chrono::milliseconds(IO_PERIOD));
+
+    // Start watchdog timer
+    watchdog.start();
 }
 
-void loop() 
-{
-    digitalWrite(LED_BUILTIN,HIGH);
+// Connected and data being sent
+bool bleconnected = false;
 
-    // Reset Channels to Center if not connected
-    if(!BLE.connected()) {
-        for(int i=0;i < 8; i++) {
-            PpmOut_setChannel(i,1500);
+void loop() 
+{     
+    // Read the PPM input data
+    uint16_t ppmin[16];
+    PpmIn_execute();
+    ppminchcnt = PpmIn_getChannels(ppmin);
+
+    // PPM Data Received
+    if(ppminchcnt >= 4 && ppminchcnt <= CHANNEL_COUNT) {                
+        // If not connected push all PPM's to output
+        if(!bleconnected) {
+            for(int i=0;i < ppminchcnt; i++) 
+                ppmChannels[i] = ppmin[i];
+
+        // If connected only push the PPM's that aren't overriden
+        } else {
+            for(int i=0;i < ppminchcnt; i++) {
+                if(!(chanoverrides & (1<<i))) {
+                    ppmChannels[i] = ppmin[i];
+                }
+            }
+        }
+
+    // No PPM Input Data
+    } else {
+        // If not connected set all ch's to zero
+        if(!bleconnected) {
+            for(int i=0;i < CHANNEL_COUNT; i++)
+                ppmChannels[i] = PPM_CENTER;
+        
+        // If connected, set all non-overrides to center
+        } else {
+            for(int i=0;i < CHANNEL_COUNT; i++) {
+                if(!(chanoverrides & (1<<i))) {
+                    ppmChannels[i] = PPM_CENTER;
+                }
+            }
         }
     }
 
+    // Set all the PPM Output Channels
+    for(int i=0;i < CHANNEL_COUNT; i++) {
+        ppmChannels[i] = MAX(MIN(ppmChannels[i],2000),1000);
+        PpmOut_setChannel(i,ppmChannels[i]);
+    }
+
     // Reset to center from this slave board
-    if(BLE.connected() && butpress) {
+    if(bleconnected && butpress) {
         if(digitalRead(D2) == 0 || 
-            digitalRead(D3) == 0) {
-                butpress.writeValue((uint8_t)'R');
-            } else {
-                butpress.writeValue((uint8_t)0);
-           }
+           digitalRead(D3) == 0) {
+            butpress.writeValue((uint8_t)'R');
+        } else {
+            butpress.writeValue((uint8_t)0);
+        }    
     }
 
     // Start Scan for PARA Slaves
@@ -65,6 +131,7 @@ void loop()
         Serial.println("Starting Scan");
         BLE.scan();
         scanning = true;           
+        bleconnected = false;
     }
 
     // If scanning see if there is a BLE device available
@@ -114,9 +181,9 @@ void loop()
                             Serial.println("Subscribing...");
                             delay(100); // Doesn't always send data if done right away
                             if(fff6.subscribe()) {
-                                Serial.println("Subscribed!");                                
+                                Serial.println("Subscribed to data!");                                
                             } else {
-                                Serial.println("Subscribe Failed");
+                                Serial.println("Subscribe tp data failed");
                                 fault = true;
                             }
                         } else  {
@@ -129,9 +196,20 @@ void loop()
                             Serial.println("Tracker has ability to remote reset center");
                         }
                         overridech = peripheral.service("fff1").characteristic("fff1");
-                        if(overridech) {
-                            Serial.println("Tracker is sending the channels it has overriden");                            
-                        }
+                        if(overridech) {    
+                            overridech.setEventHandler(BLEWritten, overrideWritten);  // Call this function on data received
+                            // Initial read of overridden channels
+                            overridech.readValue(chanoverrides);                
+                            Serial.println("Tracker has the channels it wants overriden");
+                            delay(100); // Doesn't always send data if done right away
+                            if(overridech.subscribe()) {
+                                Serial.println("Subscribed to channel overrides!");                                
+                            } else {
+                                Serial.println("Subscribe to override Failed");
+                                fault = true;
+                            }
+                        } else 
+                            chanoverrides = 0xFFFF;
                     } else {
                         Serial.println("Attribute Discovery Failed");
                         fault = true;                    
@@ -151,29 +229,45 @@ void loop()
 
     }
 
-    // Notify not connected
-    if(!BLE.connected()) {
+    // Connected
+    if(BLE.connected()) {
+        // Check how long we have been connected but haven't received any data
+        // if longer than timeout, disconnect.
+        uint32_t wdtime = std::chrono::duration_cast<std::chrono::milliseconds>(watchdog.elapsed_time()).count();
+        if(wdtime > WATCHDOG_TIMEOUT) {
+            Serial.println("***WATCHDOG.. Forcing disconnect. No data received");
+            BLE.disconnect();
+            bleconnected = false;
+        }        
+
+    // Not Connected
+    } else {
         digitalWrite(LED_BLUE,HIGH);
+        bleconnected = false;
+        watchdog.reset();
     }
 
     BLE.poll();
-    digitalWrite(LED_BUILTIN,LOW);
-    
 }
 
-void printHex(uint8_t *addr, int len)
+void printHex(uint16_t val) {
+    Serial.print("0x");
+    Serial.print(val,HEX);
+}
+
+void overrideWritten(BLEDevice central, BLECharacteristic characteristic)
 {
-    for(int i=0;i<len;i++) {
-        Serial.print("0x");
-        Serial.print(addr[i], HEX);
-        Serial.print(" ");        
-    }
+    characteristic.readValue(chanoverrides);
 }
 
 // Called when Radio Outputs new Data
 void fff6Written(BLEDevice central, BLECharacteristic characteristic) {
     // Got Data Must Be Connected
     digitalWrite(LED_BLUE,LOW);
+    bleconnected = true;
+
+    // Got some data clear the watchdog timer
+    watchdog.reset();
   
     uint8_t buffer1[BLUETOOTH_LINE_LENGTH+1];
     int len = characteristic.readValue(buffer1,32);
@@ -183,17 +277,36 @@ void fff6Written(BLEDevice central, BLECharacteristic characteristic) {
         processTrainerByte(buffer1[i]);
     }
   
-     // Got the Channel Data, Set PPM Output
-    for(int i=0;i<8;i++) {
-        // Limit channels to 1000 - 2000us
-        ppmInput[i] = MAX(MIN(ppmInput[i],2000),1000); 
-        PpmOut_setChannel(i,ppmInput[i]);
+    // Got the Channel Data, Set PPM Output if override bits set
+    for(int i=0;i<CHANNEL_COUNT;i++) {
+        // Only set the data on channels that are allowed to be overriden        
+        if(chanoverrides & (1<<i)) {
+            ppmChannels[i] = ppmInput[i];
+        }
     }    
 
 #ifdef DEBUG       
-    for(int i=0;i<8;i++) {
-        Serial.print("Ch");Serial.print(i+1);Serial.print(":");Serial.print(ppmInput[i]);Serial.print(" ");
+    Serial.print("OR: ");
+    printHex(chanoverrides);
+    Serial.print("|");
+    for(int i=0;i<CHANNEL_COUNT;i++) {
+        Serial.print("Ch");Serial.print(i+1);Serial.print(":");Serial.print(ppmChannels[i]);Serial.print(" ");
     }
     Serial.println("");
 #endif        
+}
+
+// Any IO Related Tasks, buttons, etc.. ISR. Run at 1Khz
+void io_Task()
+{
+  static int i =0;
+  // Fast Blink to know it's running
+  if(i==10) {
+    digitalWrite(LED_BUILTIN, HIGH);
+  } 
+  if(i==20) {
+    digitalWrite(LED_BUILTIN, LOW);
+    i=0;
+  }
+  i++;
 }
