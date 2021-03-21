@@ -7,7 +7,9 @@
 #include "sbus.h"
 #include <nrf_uarte.h>
 
-#define DEBUG
+// Version 1.3
+
+//#define DEBUG
 #define CHANNEL_COUNT 8
 #define PPM_CENTER 1500
 #define SBUS_CENTER 992
