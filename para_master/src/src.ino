@@ -9,6 +9,7 @@
 
 // Version 1.3
 
+
 //#define DEBUG
 #define CHANNEL_COUNT 8
 #define PPM_CENTER 1500
@@ -88,8 +89,11 @@ void setup()
     // Default all CH's at center
     for(int i=0;i < CHANNEL_COUNT; i++) {
         ppmChannels[i] = PPM_CENTER;
-        sbus_data[i] = SBUS_CENTER;
     }
+
+    // Default all SBUS to center
+    for(int i=0; i < 16; i++)
+        sbus_data[i] = SBUS_CENTER;
 
     // Start the IO task at 100hz interrupt
     ioTick.attach(callback(io_Task),std::chrono::milliseconds(IO_PERIOD));
