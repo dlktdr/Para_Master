@@ -23,6 +23,7 @@
 * IN THE SOFTWARE.
 */
 
+#include "Arduino.h"
 #include "sbus.h"
 
 namespace bfs {
@@ -136,11 +137,48 @@ namespace {
 }  // namespace
 #endif
 
+#define UARTE0_BASE_ADDR            0x40002000  // As per nRF52840 Product spec - UARTE
+#define UART_CONFIG_REG_OFFSET      0x56C
+#define UART_BAUDRATE_REG_OFFSET    0x524 // As per nRF52840 Product spec - UARTE
+#define UART0_BAUDRATE_REGISTER     (*(( unsigned int *)(UARTE0_BASE_ADDR + UART_BAUDRATE_REG_OFFSET)))
+#define UART0_CONFIG_REGISTER       (*(( unsigned int *)(UARTE0_BASE_ADDR + UART_CONFIG_REG_OFFSET)))
+#define BAUD100000                   0x0198EF80
+#define CONF8E2                      0x0000001E
+
 void SbusTx::Begin() {
   #if defined(__MK20DX128__) || defined(__MK20DX256__)
     bus_->begin(BAUD_, SERIAL_8E1_RXINV_TXINV);
   #else
     bus_->begin(BAUD_, SERIAL_8N1);
+
+    // Issue with Arduino, Cannot set 8E2 without crashing mbed.
+    // this manually sets the config regs to 100000 baud 8E2
+    UART0_BAUDRATE_REGISTER = BAUD100000;
+    UART0_CONFIG_REGISTER   = CONF8E2;
+
+    // Below uses two GPIOTE's to read the TX pin and cause it to be inverted on the RX pin
+    int txpin=3;
+    int txport=1;
+    int invtxpin=10;
+    int invtxport=1;
+    // Setup as an input, when TX pin changes state causes
+    NRF_GPIOTE->CONFIG[4] = (GPIOTE_CONFIG_MODE_Event << GPIOTE_CONFIG_MODE_Pos) |
+            (GPIOTE_CONFIG_POLARITY_Toggle << GPIOTE_CONFIG_POLARITY_Pos) |
+            (txpin <<  GPIOTE_CONFIG_PSEL_Pos) |
+            (txport << GPIOTE_CONFIG_PORT_Pos);
+
+    NRF_GPIOTE->CONFIG[5] = (GPIOTE_CONFIG_MODE_Task << GPIOTE_CONFIG_MODE_Pos) |
+            (GPIOTE_CONFIG_POLARITY_Toggle << GPIOTE_CONFIG_POLARITY_Pos) |
+            (invtxpin <<  GPIOTE_CONFIG_PSEL_Pos) |
+            (invtxport << GPIOTE_CONFIG_PORT_Pos);// |
+            //(1 << GPIOTE_CONFIG_OUTINIT_Pos);            // Initial value of pin low
+
+    // On Compare equals Value, Toggle IO Pin
+    NRF_PPI->CH[11].EEP = (uint32_t)&NRF_GPIOTE->EVENTS_IN[4];
+    NRF_PPI->CH[11].TEP = (uint32_t)&NRF_GPIOTE->TASKS_OUT[5];
+
+    // Enable PPI 11
+    NRF_PPI->CHEN |= (PPI_CHEN_CH11_Enabled << PPI_CHEN_CH11_Pos);
   #endif
 }
 void SbusTx::Write() {
