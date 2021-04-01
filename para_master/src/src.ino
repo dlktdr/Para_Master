@@ -16,7 +16,7 @@
 #define PPM_CENTER 1500
 #define SBUS_CENTER 992
 #define SBUS_UPDATE_RATE 10000 // 10ms
-#define WATCHDOG_TIMEOUT 10000
+#define WATCHDOG_TIMEOUT 9000
 #define IO_PERIOD 10
 
 uint16_t chanoverrides = 0xFFFF;
@@ -40,21 +40,21 @@ BLECharacteristic overridech;
 Timer watchdog;
 Timer sbusupdate;
 Ticker ioTick;
+rtos::Thread sbusthread(osPriorityHigh);
+rtos::Mutex sbusmutex;
 
-// Create the SBUS in/out UARTS
-//UART SerialSbusTx(digitalPinToPinName(23u),digitalPinToPinName(21u),NC,NC); //
-//UART SerialSbusRx(NC,D8,NC,NC); //
-//bfs::SbusRx sbus_rx(&SerialSbusRx);
-#define UARTE0_BASE_ADDR            0x40002000  // As per nRF52840 Product spec - UARTE
-#define UART_CONFIG_REG_OFFSET      0x56C
-#define UART_BAUDRATE_REG_OFFSET    0x524 // As per nRF52840 Product spec - UARTE
-#define UART0_BAUDRATE_REGISTER     (*(( unsigned int *)(UARTE0_BASE_ADDR + UART_BAUDRATE_REG_OFFSET)))
-#define UART0_CONFIG_REGISTER       (*(( unsigned int *)(UARTE0_BASE_ADDR + UART_CONFIG_REG_OFFSET)))
-#define BAUD100000                   0x0198EF80
-#define CONF8E2                      0x0000001E
-
+// SBUS
 bfs::SbusTx sbus_tx(&Serial1);
 std::array<uint16_t, 16> sbus_data;
+
+void sbusThread() {
+    while(true) {
+        sbusmutex.lock();
+        sbus_tx.Write();
+        sbusmutex.unlock();
+        rtos::ThisThread::sleep_for(20);
+    }
+}
 
 void setup()
 {
@@ -69,35 +69,6 @@ void setup()
     // Start SBUSOut on Pin TX(0)
     sbus_tx.Begin();
 
-    // Issue with Arduino, Cannot set 8E2 without crashing mbed.
-    // this manually sets the config regs to 100000 baud 8E2
-    UART0_BAUDRATE_REGISTER = BAUD100000;
-    UART0_CONFIG_REGISTER = CONF8E2;
-
-    // Below uses two GPIOTE's to read the TX pin and cause it to be inverted on the RX pin
-    int txpin=3;
-    int txport=1;
-    int invtxpin=10;
-    int invtxport=1;
-    // Setup as an input, when TX pin changes state causes
-    NRF_GPIOTE->CONFIG[4] = (GPIOTE_CONFIG_MODE_Event << GPIOTE_CONFIG_MODE_Pos) |
-            (GPIOTE_CONFIG_POLARITY_Toggle << GPIOTE_CONFIG_POLARITY_Pos) |
-            (txpin <<  GPIOTE_CONFIG_PSEL_Pos) |
-            (txport << GPIOTE_CONFIG_PORT_Pos);
-
-    NRF_GPIOTE->CONFIG[5] = (GPIOTE_CONFIG_MODE_Task << GPIOTE_CONFIG_MODE_Pos) |
-            (GPIOTE_CONFIG_POLARITY_Toggle << GPIOTE_CONFIG_POLARITY_Pos) |
-            (invtxpin <<  GPIOTE_CONFIG_PSEL_Pos) |
-            (invtxport << GPIOTE_CONFIG_PORT_Pos);// |
-            //(0 << GPIOTE_CONFIG_OUTINIT_Pos);            // Initial value of pin low
-
-    // On Compare equals Value, Toggle IO Pin
-    NRF_PPI->CH[11].EEP = (uint32_t)&NRF_GPIOTE->EVENTS_IN[4];
-    NRF_PPI->CH[11].TEP = (uint32_t)&NRF_GPIOTE->TASKS_OUT[5];
-
-    // Enable PPI 11
-    NRF_PPI->CHEN |= (PPI_CHEN_CH11_Enabled << PPI_CHEN_CH11_Pos);
-
     if(!BLE.begin()) {
         Serial.println("Could not start BLE");
         while(1);
@@ -108,11 +79,10 @@ void setup()
 
     PpmOut_setChnCount(CHANNEL_COUNT);
     PpmOut_setPin(D10);
-
     PpmIn_setPin(D9);
 
     // Default all CH's at center
-    for(int i=0;i < CHANNEL_COUNT; i++) {
+    for(int i=0;i < sizeof(ppmChannels); i++) {
         ppmChannels[i] = PPM_CENTER;
     }
 
@@ -125,7 +95,8 @@ void setup()
 
     // Start watchdog timer
     watchdog.start();
-    sbusupdate.start();
+    //sbusupdate.start();
+    sbusthread.start(sbusThread);
 }
 
 // Connected and data being sent
@@ -173,24 +144,25 @@ void loop()
 
     // Set all the PPM Output Channels
     for(int i=0;i < CHANNEL_COUNT; i++) {
-        ppmChannels[i] = MAX(MIN(ppmChannels[i],2000),1000);
+        ppmChannels[i] = MAX(MIN(ppmChannels[i],2012),988);
         PpmOut_setChannel(i,ppmChannels[i]);
     }
 
     // Set and send the SBUS data
-    for(int i=0;i < CHANNEL_COUNT; i++) {
-        sbus_data[i] = ppmChannels[i] - (PPM_CENTER - SBUS_CENTER);
+    sbusmutex.lock();
+    for(int i=0;i < 16; i++) {
+        float datazo = ppmChannels[i];
+        datazo -= 1500;
+        datazo *= 1.6;
+        datazo += SBUS_CENTER;
+        sbus_data[i] = datazo;
     }
-
     sbus_tx.tx_channels(sbus_data);
     sbus_tx.failsafe(false);
     sbus_tx.lost_frame(false);
     sbus_tx.ch17(false);
     sbus_tx.ch18(false);
-    if(sbusupdate.read_high_resolution_us() > SBUS_UPDATE_RATE) {
-        sbusupdate.reset();
-        sbus_tx.Write();
-    }
+    sbusmutex.unlock();
 
     // Reset to center from this slave board
     if(bleconnected && butpress) {
@@ -302,7 +274,6 @@ void loop()
             BLE.scan();
             scanning = true;
         }
-
     }
 
     // Connected
