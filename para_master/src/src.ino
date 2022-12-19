@@ -158,14 +158,15 @@ void fff6Written(BLEDevice central, BLECharacteristic characteristic) {
   // Got the Channel Data, Set PPM Output
   for (int i = 0; i < 8; i++) {
     data.ch[i] = (((float)ppmInput[i] - 1500.0f) * 1.6f) + 992; // Scale PPM to SBUS
-    data.failsafe = false;
-    sbus_tx.data(data);
-    sbus_tx.Write();
+
   }
+  data.failsafe = false;
+  sbus_tx.data(data);
+  sbus_tx.Write();
+
 
 #ifdef DEBUG
-  for (int i = 0; i < 8; i++) {
-    Serial.print("Ch");
+  for (int i = 0; i < 4; i++) {
     Serial.print(i + 1);
     Serial.print(":");
     Serial.print(ppmInput[i]);
